@@ -21,7 +21,7 @@ import requests
 import openpyxl
 import tempfile
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 # ── Config ────────────────────────────────────────────
 PAGE_ID       = os.environ.get("FACEBOOK_PAGE_ID",      "YOUR_PAGE_ID")
@@ -132,7 +132,8 @@ def save_sheet(wb):
     wb.save(EXCEL_FILE)
 
 def get_due_rows(ws):
-    now = datetime.now()
+    IST = timezone(timedelta(hours=5, minutes=30))
+    now = datetime.now(IST).replace(tzinfo=None)
     due = []
     for row in ws.iter_rows(min_row=2, values_only=False):
         status   = row[COL_STATUS - 1].value
