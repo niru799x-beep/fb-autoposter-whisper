@@ -4,11 +4,10 @@ Facebook Auto-Poster — Google Drive + Excel Version
 Excel থেকে schedule পড়ে, Google Drive থেকে ফাইল নামায়,
 Facebook Page-এ পোস্ট করে।
 
-ফোল্ডার structure (Google Drive):
+Google Drive structure:
   fb-autoposter/
-  ├── posts/
-  │   ├── images/   ← ছবি এখানে
-  │   └── videos/   ← ভিডিও এখানে
+  ├── images/   ← সব ছবি এখানে
+  └── videos/   ← সব ভিডিও এখানে
 
 Excel-এ ফাইলের নাম কলামে লিখবে:
   images/swert.jpg
@@ -24,11 +23,12 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
 # ── Config ────────────────────────────────────────────
-PAGE_ID       = os.environ.get("FACEBOOK_PAGE_ID",      "YOUR_PAGE_ID")
-ACCESS_TOKEN  = os.environ.get("FACEBOOK_ACCESS_TOKEN", "YOUR_TOKEN")
-GDRIVE_FOLDER = os.environ.get("GDRIVE_FOLDER_ID",      "1HpyhZxShboI7vfMT7NmviAueUhddmU3m")
-EXCEL_FILE    = Path("facebook_content_calendar.xlsx")
-SHEET_NAME    = "Content Calendar"
+PAGE_ID              = os.environ.get("FACEBOOK_PAGE_ID",           "YOUR_PAGE_ID")
+ACCESS_TOKEN         = os.environ.get("FACEBOOK_ACCESS_TOKEN",      "YOUR_TOKEN")
+IMAGES_FOLDER_ID     = os.environ.get("GDRIVE_IMAGES_FOLDER_ID",   "1J67hoaaQLzj8CA3A5TAEVRAirkW-_Bzc")
+VIDEOS_FOLDER_ID     = os.environ.get("GDRIVE_VIDEOS_FOLDER_ID",   "18tEbSSRM8MM-FYPfJJy7nsaajHGwKIZt")
+EXCEL_FILE           = Path("facebook_content_calendar.xlsx")
+SHEET_NAME           = "Content Calendar"
 
 # Excel column index (1-based)
 COL_ID        = 1
@@ -44,58 +44,51 @@ BASE_URL   = f"https://graph.facebook.com/v19.0/{PAGE_ID}"
 DRIVE_API  = "https://www.googleapis.com/drive/v3"
 DRIVE_DOWN = "https://drive.google.com/uc?export=download"
 
+# IST timezone
+IST = timezone(timedelta(hours=5, minutes=30))
+
 # ── Google Drive helpers ──────────────────────────────
 
 def get_file_id(filename):
     """
-    filename = "images/swert.jpg"
-    → Google Drive-এ fb-autoposter/images/swert.jpg খোঁজো
-    → file ID return করো
+    filename = "images/swert.jpg" বা "videos/sw1.mp4"
+    সরাসরি সঠিক folder ID ব্যবহার করো।
     """
     parts = filename.strip("/").split("/")
+    subfolder = parts[0].lower()   # "images" বা "videos"
+    file_name = parts[1]           # "swert.jpg"
 
-    # প্রথমে subfolder খোঁজো (images বা videos)
-    subfolder_name = parts[0]   # e.g. "images"
-    file_name      = parts[1]   # e.g. "swert.jpg"
-
-    # Subfolder ID খোঁজো
-    url = f"{DRIVE_API}/files"
-    params = {
-        "q": f"'{GDRIVE_FOLDER}' in parents and name='{subfolder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false",
-        "fields": "files(id,name)",
-        "supportsAllDrives": "true",
-    }
-    resp = requests.get(url, params=params).json()
-    folders = resp.get("files", [])
-
-    if not folders:
-        print(f"  ❌ '{subfolder_name}' subfolder পাওয়া যায়নি Google Drive-এ")
+    # Folder ID নির্ধারণ করো
+    if subfolder == "images":
+        folder_id = IMAGES_FOLDER_ID
+    elif subfolder == "videos":
+        folder_id = VIDEOS_FOLDER_ID
+    else:
+        print(f"  ❌ অচেনা subfolder: '{subfolder}' — images বা videos হতে হবে")
         return None
 
-    subfolder_id = folders[0]["id"]
-
-    # File ID খোঁজো
-    params2 = {
-        "q": f"'{subfolder_id}' in parents and name='{file_name}' and trashed=false",
+    # File খোঁজো
+    url = f"{DRIVE_API}/files"
+    params = {
+        "q": f"'{folder_id}' in parents and name='{file_name}' and trashed=false",
         "fields": "files(id,name)",
-        "supportsAllDrives": "true",
     }
-    resp2 = requests.get(url, params=params2).json()
-    files = resp2.get("files", [])
+    resp = requests.get(url, params=params).json()
+    files = resp.get("files", [])
 
     if not files:
         print(f"  ❌ '{file_name}' ফাইল পাওয়া যায়নি Google Drive-এ")
         return None
 
+    print(f"  ✓ ফাইল পাওয়া গেছে: {file_name}")
     return files[0]["id"]
 
 def download_file(file_id, dest_path):
     """Google Drive থেকে ফাইল download করো।"""
-    # প্রথম request
     session = requests.Session()
     resp = session.get(DRIVE_DOWN, params={"id": file_id}, stream=True)
 
-    # Large file confirmation (virus scan warning bypass)
+    # Large file confirmation
     token = None
     for key, value in resp.cookies.items():
         if key.startswith("download_warning"):
@@ -115,7 +108,7 @@ def download_file(file_id, dest_path):
                 f.write(chunk)
 
     size = Path(dest_path).stat().st_size
-    print(f"  ✓ Download হয়েছে: {Path(dest_path).name} ({size//1024} KB)")
+    print(f"  ✓ Download হয়েছে ({size//1024} KB)")
     return size > 0
 
 # ── Load Excel ────────────────────────────────────────
@@ -132,7 +125,6 @@ def save_sheet(wb):
     wb.save(EXCEL_FILE)
 
 def get_due_rows(ws):
-    IST = timezone(timedelta(hours=5, minutes=30))
     now = datetime.now(IST).replace(tzinfo=None)
     due = []
     for row in ws.iter_rows(min_row=2, values_only=False):
@@ -163,7 +155,6 @@ def post_video(file_path, caption):
     print(f"  🎬 Video পোস্ট করছি...")
     file_size = Path(file_path).stat().st_size
 
-    # Init
     init = requests.post(
         f"{BASE_URL}/video_reels",
         data={"upload_phase": "start", "access_token": ACCESS_TOKEN}
@@ -175,7 +166,6 @@ def post_video(file_path, caption):
     video_id   = init["video_id"]
     upload_url = init["upload_url"]
 
-    # Upload
     with open(file_path, "rb") as f:
         up = requests.post(
             upload_url,
@@ -190,7 +180,6 @@ def post_video(file_path, caption):
         print(f"  ❌ Upload error: {up}")
         return None
 
-    # Publish
     pub = requests.post(
         f"{BASE_URL}/video_reels",
         data={
@@ -227,11 +216,10 @@ def mark_done(ws, row, post_id):
 # ── Main ──────────────────────────────────────────────
 
 def main():
+    now_ist = datetime.now(IST)
     print("=" * 55)
     print("  Facebook Auto-Poster (Google Drive + Excel)")
-    IST = timezone(timedelta(hours=5, minutes=30))
-    now_ist = datetime.now(IST)
-    print(f"  সময়: {now_ist.strftime('%d/%m/%Y %H:%M')}")
+    print(f"  সময়: {now_ist.strftime('%d/%m/%Y %H:%M')} IST")
     print("=" * 55)
 
     wb, ws = load_sheet()
@@ -258,19 +246,18 @@ def main():
             post_id = post_text(caption)
 
         elif post_type in ("image", "video"):
-            # Google Drive থেকে ফাইল নামাও
             print(f"  ☁️  Google Drive থেকে নামাচ্ছি: {filename}")
             file_id = get_file_id(filename)
             if not file_id:
                 continue
 
-            # Temp ফাইলে save করো
             suffix = Path(filename).suffix
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 tmp_path = tmp.name
 
             if not download_file(file_id, tmp_path):
                 print(f"  ❌ Download ব্যর্থ")
+                Path(tmp_path).unlink(missing_ok=True)
                 continue
 
             if post_type == "image":
@@ -278,7 +265,6 @@ def main():
             else:
                 post_id = post_video(tmp_path, caption)
 
-            # Temp ফাইল মুছে দাও
             Path(tmp_path).unlink(missing_ok=True)
 
         else:
@@ -295,7 +281,6 @@ def main():
     save_sheet(wb)
     print(f"\n{'='*55}")
     print(f"  ✅ {posted_count}/{len(due_rows)} পোস্ট সফল।")
-    print(f"  Excel আপডেট হয়েছে।")
     print(f"{'='*55}")
 
 if __name__ == "__main__":
