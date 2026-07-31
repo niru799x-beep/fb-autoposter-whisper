@@ -229,7 +229,9 @@ def mark_done(ws, row, post_id):
 def main():
     print("=" * 55)
     print("  Facebook Auto-Poster (Google Drive + Excel)")
-    print(f"  সময়: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    IST = timezone(timedelta(hours=5, minutes=30))
+    now_ist = datetime.now(IST)
+    print(f"  সময়: {now_ist.strftime('%d/%m/%Y %H:%M')}")
     print("=" * 55)
 
     wb, ws = load_sheet()
