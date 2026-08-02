@@ -1,17 +1,29 @@
 """
-Facebook Auto-Poster — Google Drive API Key Version
-=====================================================
-Excel থেকে schedule পড়ে, Google Drive থেকে ফাইল নামায়,
-Facebook Page-এ পোস্ট করে।
+Facebook Auto-Poster — Google Drive (Folder) + Excel Version
+===============================================================
+Excel থেকে schedule পড়ে, Google Drive-এর images/videos ফোল্ডার থেকে
+ফাইলের নাম দিয়ে খুঁজে ফাইল নামায়, Facebook Page-এ পোস্ট করে।
 
-Google Drive structure:
-  fb-autoposter/
-  ├── images/   ← সব ছবি এখানে
-  └── videos/   ← সব ভিডিও এখানে
+কীভাবে ব্যবহার করবে:
+1. Google Drive-এ "fb-autoposter" ফোল্ডারের ভেতরে "images" ও "videos"
+   নামে দুটো সাব-ফোল্ডার বানাও
+2. ছবি images ফোল্ডারে, ভিডিও videos ফোল্ডারে আপলোড করো
+3. পুরো fb-autoposter ফোল্ডার Share → "Anyone with the link" (Viewer)
+4. Excel-এ শুধু ফাইলের নাম লিখো (কোনো prefix ছাড়া), যেমন: swert.jpg
+5. Type কলামে Image/Video ঠিকভাবে দাও — এটা দিয়েই ঠিক করা হবে কোন
+   সাব-ফোল্ডারে খুঁজবে
+6. Schedule Time দাও → GitHub-এ upload করো
 
-Excel-এ ফাইলের নাম কলামে লিখবে:
-  images/swert.jpg
-  videos/sw1.mp4
+প্রয়োজনীয় GitHub Secrets:
+  FACEBOOK_PAGE_ID
+  FACEBOOK_ACCESS_TOKEN
+  GDRIVE_API_KEY            ← Google Cloud Console থেকে বানানো API key
+  GDRIVE_IMAGES_FOLDER_ID   ← "images" ফোল্ডারের URL থেকে ID
+  GDRIVE_VIDEOS_FOLDER_ID   ← "videos" ফোল্ডারের URL থেকে ID
+
+⚠️  গুরুত্বপূর্ণ: fb-autoposter ফোল্ডারটা অবশ্যই "Anyone with the
+    link can view" করে শেয়ার করা থাকতে হবে, নাহলে API key দিয়ে
+    ফাইল খুঁজে পাওয়া/ডাউনলোড করা যাবে না।
 """
 
 import os
@@ -23,13 +35,13 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
 # ── Config ────────────────────────────────────────────
-PAGE_ID          = os.environ.get("FACEBOOK_PAGE_ID",      "YOUR_PAGE_ID")
-ACCESS_TOKEN     = os.environ.get("FACEBOOK_ACCESS_TOKEN", "YOUR_TOKEN")
-GOOGLE_API_KEY   = os.environ.get("GOOGLE_API_KEY",        "YOUR_API_KEY")
-IMAGES_FOLDER_ID = "1J67hoaaQLzj8CA3A5TAEVRAirkW-_Bzc"
-VIDEOS_FOLDER_ID = "18tEbSSRM8MM-FYPfJJy7nsaajHGwKIZt"
-EXCEL_FILE       = Path("facebook_content_calendar.xlsx")
-SHEET_NAME       = "Content Calendar"
+PAGE_ID            = os.environ.get("FACEBOOK_PAGE_ID",      "YOUR_PAGE_ID")
+ACCESS_TOKEN       = os.environ.get("FACEBOOK_ACCESS_TOKEN", "YOUR_TOKEN")
+GDRIVE_API_KEY     = os.environ.get("GDRIVE_API_KEY",        "YOUR_GDRIVE_API_KEY")
+GDRIVE_IMAGES_ID   = os.environ.get("GDRIVE_IMAGES_FOLDER_ID", "")
+GDRIVE_VIDEOS_ID   = os.environ.get("GDRIVE_VIDEOS_FOLDER_ID", "")
+EXCEL_FILE         = Path("facebook_content_calendar.xlsx")
+SHEET_NAME         = "Content Calendar"
 
 COL_ID       = 1
 COL_FILENAME = 2
@@ -43,46 +55,52 @@ COL_NOTE     = 8
 BASE_URL = f"https://graph.facebook.com/v19.0/{PAGE_ID}"
 IST      = timezone(timedelta(hours=5, minutes=30))
 
+GDRIVE_API_BASE = "https://www.googleapis.com/drive/v3/files"
+
 # ── Google Drive helpers ──────────────────────────────
 
-def get_file_id(filename):
-    """filename = images/swert.jpg → Google Drive file ID"""
-    parts = filename.strip("/").split("/")
-    subfolder = parts[0].lower()
-    file_name = parts[1]
-
-    folder_id = IMAGES_FOLDER_ID if subfolder == "images" else VIDEOS_FOLDER_ID
+def find_file_in_folder(folder_id, filename):
+    """
+    নির্দিষ্ট Drive ফোল্ডারের ভেতরে filename দিয়ে ফাইল খোঁজো।
+    মিলে গেলে সেই ফাইলের Drive ID রিটার্ন করে, না পেলে None।
+    """
+    # Drive query-তে single quote escape করতে হয়
+    safe_name = filename.replace("'", "\\'")
+    query = f"'{folder_id}' in parents and name = '{safe_name}' and trashed = false"
 
     resp = requests.get(
-        "https://www.googleapis.com/drive/v3/files",
+        GDRIVE_API_BASE,
         params={
-            "q": f"'{folder_id}' in parents and name='{file_name}' and trashed=false",
-            "fields": "files(id,name)",
-            "key": GOOGLE_API_KEY,
-        }
+            "q": query,
+            "key": GDRIVE_API_KEY,
+            "fields": "files(id, name)",
+            "supportsAllDrives": "true",
+            "includeItemsFromAllDrives": "true",
+        },
     ).json()
+
+    if "error" in resp:
+        print(f"  ❌ Drive search error: {resp['error'].get('message', resp)}")
+        return None
 
     files = resp.get("files", [])
     if not files:
-        print(f"  ❌ '{file_name}' পাওয়া যায়নি Google Drive-এ")
+        print(f"  ❌ '{filename}' নামের ফাইল ফোল্ডারে পাওয়া যায়নি")
         return None
 
-    print(f"  ✓ ফাইল পাওয়া গেছে: {file_name}")
     return files[0]["id"]
 
-def download_file(file_id, dest_path):
-    """Google Drive থেকে public ফাইল download করো।"""
-    url = f"https://www.googleapis.com/drive/v3/files/{file_id}"
-    
-    # প্রথমে file info নাও
-    info = requests.get(url, params={"key": GOOGLE_API_KEY, "fields": "size,name"}).json()
-    
-    # Download করো
+def download_from_gdrive(file_id, dest_path):
+    """Drive API-এর media endpoint দিয়ে ফাইল download করো (public file)."""
     resp = requests.get(
-        url,
-        params={"key": GOOGLE_API_KEY, "alt": "media"},
-        stream=True
+        f"{GDRIVE_API_BASE}/{file_id}",
+        params={"alt": "media", "key": GDRIVE_API_KEY},
+        stream=True,
     )
+
+    if resp.status_code != 200:
+        print(f"  ❌ Download ব্যর্থ (status {resp.status_code}): {resp.text[:200]}")
+        return False
 
     with open(dest_path, "wb") as f:
         for chunk in resp.iter_content(chunk_size=32768):
@@ -90,8 +108,12 @@ def download_file(file_id, dest_path):
                 f.write(chunk)
 
     size = Path(dest_path).stat().st_size
-    print(f"  ✓ Download হয়েছে ({size//1024} KB)")
-    return size > 0
+    if size == 0:
+        print("  ❌ ডাউনলোড হওয়া ফাইল খালি")
+        return False
+
+    print(f"  ✓ Google Drive থেকে download হয়েছে ({size//1024} KB)")
+    return True
 
 # ── Load Excel ────────────────────────────────────────
 
@@ -228,16 +250,26 @@ def main():
             post_id = post_text(caption)
 
         elif post_type in ("image", "video"):
-            print(f"  ☁️  Google Drive থেকে নামাচ্ছি: {filename}")
-            file_id = get_file_id(filename)
-            if not file_id:
+            if not filename:
+                print(f"  ⚠️  ফাইলের নাম খালি, স্কিপ করা হলো")
                 continue
 
-            suffix = Path(filename).suffix
+            folder_id = GDRIVE_IMAGES_ID if post_type == "image" else GDRIVE_VIDEOS_ID
+            if not folder_id:
+                print(f"  ❌ GDRIVE_{'IMAGES' if post_type == 'image' else 'VIDEOS'}_FOLDER_ID সেট করা নেই")
+                continue
+
+            print(f"  🔎 '{filename}' ফোল্ডারে খুঁজছি...")
+            gdrive_file_id = find_file_in_folder(folder_id, filename)
+            if not gdrive_file_id:
+                continue
+
+            print(f"  📥 Google Drive থেকে নামাচ্ছি...")
+            suffix = Path(filename).suffix or (".jpg" if post_type == "image" else ".mp4")
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 tmp_path = tmp.name
 
-            if not download_file(file_id, tmp_path):
+            if not download_from_gdrive(gdrive_file_id, tmp_path):
                 print(f"  ❌ Download ব্যর্থ")
                 Path(tmp_path).unlink(missing_ok=True)
                 continue
