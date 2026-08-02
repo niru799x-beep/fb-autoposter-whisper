@@ -24,9 +24,11 @@ jobs:
 
       - name: Run auto-poster
         env:
-          FACEBOOK_PAGE_ID:      ${{ secrets.FACEBOOK_PAGE_ID }}
-          FACEBOOK_ACCESS_TOKEN: ${{ secrets.FACEBOOK_ACCESS_TOKEN }}
-          GOOGLE_API_KEY:        ${{ secrets.GOOGLE_API_KEY }}
+          FACEBOOK_PAGE_ID:        ${{ secrets.FACEBOOK_PAGE_ID }}
+          FACEBOOK_ACCESS_TOKEN:   ${{ secrets.FACEBOOK_ACCESS_TOKEN }}
+          GDRIVE_API_KEY:          ${{ secrets.GDRIVE_API_KEY }}
+          GDRIVE_IMAGES_FOLDER_ID: ${{ secrets.GDRIVE_IMAGES_FOLDER_ID }}
+          GDRIVE_VIDEOS_FOLDER_ID: ${{ secrets.GDRIVE_VIDEOS_FOLDER_ID }}
         run: python post_from_excel.py
 
       - name: Push updated Excel
