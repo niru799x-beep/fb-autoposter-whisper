@@ -2,8 +2,8 @@ name: Facebook Auto-Post (Excel)
 
 on:
   schedule:
-    # প্রতি ঘণ্টায় চেক করবে — due পোস্ট থাকলে পোস্ট করবে, না থাকলে বন্ধ
-    - cron: "0 * * * *"
+    # প্রতি ১৫ মিনিটে চেক করবে — due পোস্ট থাকলে পোস্ট করবে, না থাকলে বন্ধ
+    - cron: "*/15 * * * *"
 
   # হাতে চালাতে চাইলে
   workflow_dispatch:
@@ -24,12 +24,16 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install requests openpyxl
+        run: pip install requests openpyxl boto3
 
       - name: Run auto-poster
         env:
-          FACEBOOK_PAGE_ID:      ${{ secrets.FACEBOOK_PAGE_ID }}
-          FACEBOOK_ACCESS_TOKEN: ${{ secrets.FACEBOOK_ACCESS_TOKEN }}
+          FACEBOOK_PAGE_ID:        ${{ secrets.FACEBOOK_PAGE_ID }}
+          FACEBOOK_ACCESS_TOKEN:   ${{ secrets.FACEBOOK_ACCESS_TOKEN }}
+          R2_ACCESS_KEY_ID:        ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY:    ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL:         ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET_NAME:          ${{ secrets.R2_BUCKET_NAME }}
         run: python post_from_excel.py
 
       # Excel আপডেট (Status: Done, Post ID) GitHub-এ push করো
