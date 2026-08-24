@@ -2,12 +2,16 @@ name: Facebook Auto-Post (Excel)
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # প্রতি ঘণ্টায় চেক করবে — due পোস্ট থাকলে পোস্ট করবে, না থাকলে বন্ধ
+    - cron: "0 * * * *"
+
+  # হাতে চালাতে চাইলে
   workflow_dispatch:
 
 jobs:
   post:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -24,13 +28,11 @@ jobs:
 
       - name: Run auto-poster
         env:
-          FACEBOOK_PAGE_ID:        ${{ secrets.FACEBOOK_PAGE_ID }}
-          FACEBOOK_ACCESS_TOKEN:   ${{ secrets.FACEBOOK_ACCESS_TOKEN }}
-          GDRIVE_API_KEY:          ${{ secrets.GDRIVE_API_KEY }}
-          GDRIVE_IMAGES_FOLDER_ID: ${{ secrets.GDRIVE_IMAGES_FOLDER_ID }}
-          GDRIVE_VIDEOS_FOLDER_ID: ${{ secrets.GDRIVE_VIDEOS_FOLDER_ID }}
+          FACEBOOK_PAGE_ID:      ${{ secrets.FACEBOOK_PAGE_ID }}
+          FACEBOOK_ACCESS_TOKEN: ${{ secrets.FACEBOOK_ACCESS_TOKEN }}
         run: python post_from_excel.py
 
+      # Excel আপডেট (Status: Done, Post ID) GitHub-এ push করো
       - name: Push updated Excel
         run: |
           git config user.name  "github-actions[bot]"
