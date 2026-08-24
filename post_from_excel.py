@@ -1,47 +1,51 @@
 """
-Facebook Auto-Poster — Google Drive (Folder) + Excel Version
+Facebook Auto-Poster — Cloudflare R2 (Bucket) + Excel Version
 ===============================================================
-Excel থেকে schedule পড়ে, Google Drive-এর images/videos ফোল্ডার থেকে
-ফাইলের নাম দিয়ে খুঁজে ফাইল নামায়, Facebook Page-এ পোস্ট করে।
+Excel থেকে schedule পড়ে, Cloudflare R2 bucket-এর images/ ও videos/
+ফোল্ডার থেকে ফাইলের নাম দিয়ে ফাইল নামায়, Facebook Page-এ পোস্ট করে।
 
 কীভাবে ব্যবহার করবে:
-1. Google Drive-এ "fb-autoposter" ফোল্ডারের ভেতরে "images" ও "videos"
-   নামে দুটো সাব-ফোল্ডার বানাও
-2. ছবি images ফোল্ডারে, ভিডিও videos ফোল্ডারে আপলোড করো
-3. পুরো fb-autoposter ফোল্ডার Share → "Anyone with the link" (Viewer)
+1. Cloudflare R2-তে একটা bucket বানাও (যেমন: fb-lol-cringe)
+2. bucket-এর ভেতরে "images" ও "videos" নামে দুটো ফোল্ডার (prefix) বানাও
+3. ছবি images/ ফোল্ডারে, ভিডিও videos/ ফোল্ডারে আপলোড করো
 4. Excel-এ শুধু ফাইলের নাম লিখো (কোনো prefix ছাড়া), যেমন: swert.jpg
 5. Type কলামে Image/Video ঠিকভাবে দাও — এটা দিয়েই ঠিক করা হবে কোন
-   সাব-ফোল্ডারে খুঁজবে
+   ফোল্ডারে (images/ বা videos/) খুঁজবে
 6. Schedule Time দাও → GitHub-এ upload করো
 
 প্রয়োজনীয় GitHub Secrets:
   FACEBOOK_PAGE_ID
   FACEBOOK_ACCESS_TOKEN
-  GDRIVE_API_KEY            ← Google Cloud Console থেকে বানানো API key
-  GDRIVE_IMAGES_FOLDER_ID   ← "images" ফোল্ডারের URL থেকে ID
-  GDRIVE_VIDEOS_FOLDER_ID   ← "videos" ফোল্ডারের URL থেকে ID
+  R2_ACCESS_KEY_ID       ← Cloudflare R2 API token থেকে
+  R2_SECRET_ACCESS_KEY   ← Cloudflare R2 API token থেকে
+  R2_ENDPOINT_URL        ← https://<account_id>.r2.cloudflarestorage.com
+  R2_BUCKET_NAME         ← যেমন: fb-lol-cringe
 
-⚠️  গুরুত্বপূর্ণ: fb-autoposter ফোল্ডারটা অবশ্যই "Anyone with the
-    link can view" করে শেয়ার করা থাকতে হবে, নাহলে API key দিয়ে
-    ফাইল খুঁজে পাওয়া/ডাউনলোড করা যাবে না।
+⚠️  bucket-টা public হতে হবে না — boto3 নিজের access key/secret দিয়ে
+    সরাসরি R2-র সাথে কথা বলে, তাই Google Drive-এর মতো "Anyone with
+    the link" শেয়ার করার দরকার নেই।
 """
 
 import os
 import sys
 import requests
 import openpyxl
+import boto3
 import tempfile
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
 # ── Config ────────────────────────────────────────────
-PAGE_ID            = os.environ.get("FACEBOOK_PAGE_ID",      "YOUR_PAGE_ID")
-ACCESS_TOKEN       = os.environ.get("FACEBOOK_ACCESS_TOKEN", "YOUR_TOKEN")
-GDRIVE_API_KEY     = os.environ.get("GDRIVE_API_KEY",        "YOUR_GDRIVE_API_KEY")
-GDRIVE_IMAGES_ID   = os.environ.get("GDRIVE_IMAGES_FOLDER_ID", "")
-GDRIVE_VIDEOS_ID   = os.environ.get("GDRIVE_VIDEOS_FOLDER_ID", "")
-EXCEL_FILE         = Path("facebook_content_calendar.xlsx")
-SHEET_NAME         = "Content Calendar"
+PAGE_ID       = os.environ.get("FACEBOOK_PAGE_ID",      "YOUR_PAGE_ID")
+ACCESS_TOKEN  = os.environ.get("FACEBOOK_ACCESS_TOKEN", "YOUR_TOKEN")
+
+R2_ACCESS_KEY = os.environ.get("R2_ACCESS_KEY_ID", "")
+R2_SECRET_KEY = os.environ.get("R2_SECRET_ACCESS_KEY", "")
+R2_ENDPOINT   = os.environ.get("R2_ENDPOINT_URL", "")
+R2_BUCKET     = os.environ.get("R2_BUCKET_NAME", "")
+
+EXCEL_FILE  = Path("facebook_content_calendar.xlsx")
+SHEET_NAME  = "Content Calendar"
 
 COL_ID       = 1
 COL_FILENAME = 2
@@ -55,64 +59,31 @@ COL_NOTE     = 8
 BASE_URL = f"https://graph.facebook.com/v19.0/{PAGE_ID}"
 IST      = timezone(timedelta(hours=5, minutes=30))
 
-GDRIVE_API_BASE = "https://www.googleapis.com/drive/v3/files"
+s3 = boto3.client(
+    "s3",
+    endpoint_url=R2_ENDPOINT,
+    aws_access_key_id=R2_ACCESS_KEY,
+    aws_secret_access_key=R2_SECRET_KEY,
+)
 
-# ── Google Drive helpers ──────────────────────────────
+# ── Cloudflare R2 helpers ──────────────────────────────
 
-def find_file_in_folder(folder_id, filename):
-    """
-    নির্দিষ্ট Drive ফোল্ডারের ভেতরে filename দিয়ে ফাইল খোঁজো।
-    মিলে গেলে সেই ফাইলের Drive ID রিটার্ন করে, না পেলে None।
-    """
-    # Drive query-তে single quote escape করতে হয়
-    safe_name = filename.replace("'", "\\'")
-    query = f"'{folder_id}' in parents and name = '{safe_name}' and trashed = false"
-
-    resp = requests.get(
-        GDRIVE_API_BASE,
-        params={
-            "q": query,
-            "key": GDRIVE_API_KEY,
-            "fields": "files(id, name)",
-            "supportsAllDrives": "true",
-            "includeItemsFromAllDrives": "true",
-        },
-    ).json()
-
-    if "error" in resp:
-        print(f"  ❌ Drive search error: {resp['error'].get('message', resp)}")
-        return None
-
-    files = resp.get("files", [])
-    if not files:
-        print(f"  ❌ '{filename}' নামের ফাইল ফোল্ডারে পাওয়া যায়নি")
-        return None
-
-    return files[0]["id"]
-
-def download_from_gdrive(file_id, dest_path):
-    """Drive API-এর media endpoint দিয়ে ফাইল download করো (public file)."""
-    resp = requests.get(
-        f"{GDRIVE_API_BASE}/{file_id}",
-        params={"alt": "media", "key": GDRIVE_API_KEY},
-        stream=True,
-    )
-
-    if resp.status_code != 200:
-        print(f"  ❌ Download ব্যর্থ (status {resp.status_code}): {resp.text[:200]}")
+def download_from_r2(post_type, filename, dest_path):
+    """R2 bucket-এর images/ বা videos/ ফোল্ডার থেকে ফাইল নামায়।"""
+    prefix = "images" if post_type == "image" else "videos"
+    key = f"{prefix}/{filename}"
+    try:
+        s3.download_file(R2_BUCKET, key, dest_path)
+    except Exception as e:
+        print(f"  ❌ '{key}' ডাউনলোড ব্যর্থ: {e}")
         return False
-
-    with open(dest_path, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=32768):
-            if chunk:
-                f.write(chunk)
 
     size = Path(dest_path).stat().st_size
     if size == 0:
         print("  ❌ ডাউনলোড হওয়া ফাইল খালি")
         return False
 
-    print(f"  ✓ Google Drive থেকে download হয়েছে ({size//1024} KB)")
+    print(f"  ✓ R2 থেকে download হয়েছে ({size//1024} KB)")
     return True
 
 # ── Load Excel ────────────────────────────────────────
@@ -222,7 +193,7 @@ def mark_done(ws, row, post_id):
 def main():
     now_ist = datetime.now(IST)
     print("=" * 55)
-    print("  Facebook Auto-Poster (Google Drive + Excel)")
+    print("  Facebook Auto-Poster (Cloudflare R2 + Excel)")
     print(f"  সময়: {now_ist.strftime('%d/%m/%Y %H:%M')} IST")
     print("=" * 55)
 
@@ -254,23 +225,16 @@ def main():
                 print(f"  ⚠️  ফাইলের নাম খালি, স্কিপ করা হলো")
                 continue
 
-            folder_id = GDRIVE_IMAGES_ID if post_type == "image" else GDRIVE_VIDEOS_ID
-            if not folder_id:
-                print(f"  ❌ GDRIVE_{'IMAGES' if post_type == 'image' else 'VIDEOS'}_FOLDER_ID সেট করা নেই")
+            if not R2_BUCKET:
+                print(f"  ❌ R2_BUCKET_NAME সেট করা নেই")
                 continue
 
-            print(f"  🔎 '{filename}' ফোল্ডারে খুঁজছি...")
-            gdrive_file_id = find_file_in_folder(folder_id, filename)
-            if not gdrive_file_id:
-                continue
-
-            print(f"  📥 Google Drive থেকে নামাচ্ছি...")
             suffix = Path(filename).suffix or (".jpg" if post_type == "image" else ".mp4")
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 tmp_path = tmp.name
 
-            if not download_from_gdrive(gdrive_file_id, tmp_path):
-                print(f"  ❌ Download ব্যর্থ")
+            print(f"  📥 R2 থেকে নামাচ্ছি...")
+            if not download_from_r2(post_type, filename, tmp_path):
                 Path(tmp_path).unlink(missing_ok=True)
                 continue
 
