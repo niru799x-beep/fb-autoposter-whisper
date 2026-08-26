@@ -99,14 +99,32 @@ def load_sheet():
 def save_sheet(wb):
     wb.save(EXCEL_FILE)
 
+def parse_schedule(value):
+    """Excel সেলে datetime object বা DD-MM-YYYY HH:MM স্ট্রিং — দুটোই handle করে।
+    আগের ভার্সনে শুধু isinstance(schedule, datetime) চেক করা হতো, তাই
+    টেক্সট হিসেবে টাইপ করা schedule time চুপচাপ স্কিপ হয়ে যেত।"""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        for fmt in ("%d-%m-%Y %H:%M", "%d/%m/%Y %H:%M", "%Y-%m-%d %H:%M"):
+            try:
+                return datetime.strptime(text, fmt)
+            except ValueError:
+                continue
+        print(f"  ⚠️  Schedule Time পার্স করা গেলো না: '{text}' (ফরম্যাট মিলছে না)")
+    return None
+
 def get_due_rows(ws):
     now = datetime.now(IST).replace(tzinfo=None)
     due = []
     for row in ws.iter_rows(min_row=2, values_only=False):
         status   = row[COL_STATUS - 1].value
-        schedule = row[COL_SCHEDULE - 1].value
+        schedule = parse_schedule(row[COL_SCHEDULE - 1].value)
         if status and str(status).strip().lower() == "pending":
-            if schedule and isinstance(schedule, datetime) and schedule <= now:
+            if schedule and schedule <= now:
                 due.append(row)
     return due
 
